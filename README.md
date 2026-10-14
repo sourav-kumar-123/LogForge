@@ -58,7 +58,4 @@ python -m pytest -v
 ```
 Test covers the health -check endpoints, valid log ingestion, and valid log level validation
 
-## Project Status
 
-Day 1 - Initial backend setup.
-Day 2 - log ingestion and automated testing
