@@ -1,11 +1,11 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 from typing import Literal
 from datetime import datetime, timezone
 from uuid import uuid4
 from copy import deepcopy
-raw_logs = {}
-normalized_logs = {}
+from storage import MemoryStorage
+storage = MemoryStorage()
 
 class LogEvent(BaseModel):
     source: str = Field(min_length=1)
@@ -63,14 +63,29 @@ def ingest_log(event: LogEvent):
         "payload": deepcopy(event.model_dump()),
 
     }
+
     normalized_event = normalized_log(event,raw_event_id)
 
-    raw_logs[raw_event_id] = raw_event
-    normalized_logs[normalized_event.event_id] = normalized_event.model_dump(mode="json")
+    storage.save_raw(raw_event_id,raw_event)
+    normalized_data = normalized_event.model_dump(mode = "json")
+    storage.save_normalized(normalized_event.event_id, normalized_data)
+
     return{
         "accepted": True,
-        "message": "Log Received Successfully",
+        "message": "Log Received and normalized Successfully",
         "raw_event":raw_event,
-        "event": normalized_event.model_dump(mode="json"),
+        "event": normalized_data,
     }
+
+@app.get("/raw/{raw_event_id}")
+def get_raw_logs(raw_event_id:str):
+    raw_event = storage.get_raw(raw_event_id)
+    if raw_event is None: 
+        raise HTTPException(
+            status_code = 404,
+            detail = "Raw Event Not Found",
+        )
+    return raw_event
+
+
 
