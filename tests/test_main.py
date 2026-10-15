@@ -33,3 +33,25 @@ def test_ingest_invalid_level():
     response = client.post("/ingest", json = payload)
     assert response.status_code == 422
 
+def test_raw_and_normalized_event_linkage():
+    payload = {
+        "source": "web-server-01",
+        "level": "ERROR",
+        "message": "Database Connection Failed"
+    }
+
+    response = client.post("/ingest",json=payload)
+
+    assert response.status_code == 200
+
+    data = response.json()
+    raw_event_id = data["raw_event"]["raw_event_id"]
+    normalized_event = data["event"]
+
+    assert raw_event_id
+    assert normalized_event["event_id"]
+    assert normalized_event["raw_event_id"] == raw_event_id
+    assert normalized_event["schema_version"] == "1.0"
+
+
+
