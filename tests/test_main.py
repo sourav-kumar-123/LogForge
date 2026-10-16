@@ -116,3 +116,43 @@ def test_ingest_whitespace_message():
 
     assert response.status_code == 422
 
+def test_batch_ingestion():
+    payload = {
+        "events": [
+            {
+                "source":"web-server-01",
+                "level": "ERROR",
+                "message": "Database Connection failed",
+            },
+            {
+                "source":"payment-service",
+                "level": "WARNING",
+                "message": "payment response was slow",
+            },
+        ]
+    }
+
+    response = client.post("/ingest/batch", json = payload)
+
+    assert response.status_code == 200
+
+    data = response.json()
+    assert data["accepted"] is True
+    assert data["count"] == 2
+    assert len(data["result"]) == 2
+
+    for results in data["result"]:
+        assert results["event"]["raw_event_id"] == (
+            results["raw_event"]["raw_event_id"]
+        )
+
+def test_batch_ingestion_empty_event():
+    payload= {
+        "events":[]
+    }
+
+    response = client.post("/ingest/batch", json = payload)
+    assert response.status_code == 422
+
+
+

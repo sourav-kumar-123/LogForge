@@ -6,6 +6,8 @@ from uuid import uuid4
 from copy import deepcopy
 from storage import MemoryStorage
 from pydantic import field_validator
+from typing import List
+
 storage = MemoryStorage()
 
 class LogEvent(BaseModel):
@@ -104,5 +106,37 @@ def get_normalized_event(event_id:str):
         )
     return normalized_event
 
+class BatchLogRequest(BaseModel):
+    events: List[LogEvent] = Field(min_length=1, max_length = 100)
 
+@app.post("/ingest/batch")
+def ingest_batch(request: BatchLogRequest):
+    result = []
+
+    for event in request.events:
+        raw_event_id = str(uuid4())
+
+        raw_event = {
+            "raw_event_id": raw_event_id,
+            "recieved_at": datetime.now(timezone.utc).isoformat(),
+            "payload": deepcopy(event.model_dump()),
+
+        }
+
+        normalized_event = normalized_log(event,raw_event_id)
+        normalized_data = normalized_event.model_dump(mode = "json")
+        storage.save_raw(raw_event_id,raw_event)
+        storage.save_normalized(normalized_event.event_id,normalized_data)
+
+        result.append({
+            "raw_event": raw_event,
+            "event": normalized_data,
+        })
+
+    return {
+        "accepted": True,
+        "count": len(result),
+        "result": result,
+
+    }
 
