@@ -53,5 +53,22 @@ def test_raw_and_normalized_event_linkage():
     assert normalized_event["raw_event_id"] == raw_event_id
     assert normalized_event["schema_version"] == "1.0"
 
+def test_normalized_event_retrieval():
+    payload = {
+        "source": "web-server-01",
+        "level": "ERROR",
+        "message": "Database Connection failed",
+    }
 
+    ingest_response = client.post("/ingest", json = payload)
+    assert ingest_response.status_code == 200
+    event_id = ingest_response.json()["event"]["event_id"]
+    response = client.get(f"/events/{event_id}")
+
+    assert response.status_code == 200
+    assert response.json()["event_id"] == event_id
+    assert response.json()["severity"] == "ERROR"
+    assert response.json()["raw_event_id"] == (
+        ingest_response.json()["raw_event"]["raw_event_id"]
+    )
 

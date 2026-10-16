@@ -87,5 +87,15 @@ def get_raw_logs(raw_event_id:str):
         )
     return raw_event
 
+@app.get("/events/{event_id}")
+def get_normalized_event(event_id:str):
+    normalized_event = storage.get_normalized(event_id)
+    if normalized_event is None:
+        raise HTTPException(
+            status_code =404,
+            detail = "Normalized event not found"
+        )
+    return normalized_event
+
 
 
