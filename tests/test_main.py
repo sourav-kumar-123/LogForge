@@ -72,3 +72,26 @@ def test_normalized_event_retrieval():
         ingest_response.json()["raw_event"]["raw_event_id"]
     )
 
+def test_ingest_empty_source():
+    payload = {
+        "source": "",
+        "level": "ERROR",
+        "message": "Database Connection Failed",
+    }
+
+    response = client.post("/ingest",json = payload)
+
+    assert response.status_code == 422
+
+def test_ingest_empty_message():
+    payload = {
+        "source": "web-server-01",
+        "level": "ERROR",
+        "message": "",
+    }
+
+    response = client.post("/ingest",json = payload)
+
+    assert response.status_code == 422
+
+
