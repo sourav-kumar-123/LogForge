@@ -94,4 +94,25 @@ def test_ingest_empty_message():
 
     assert response.status_code == 422
 
+def test_ingest_whitespace_sources():
+    payload = {
+        "source":"   ",
+        "level": "ERROR",
+        "message": "Database connection failed",
+    }
+
+    response = client.post("/ingest", json =payload)
+
+    assert response.status_code == 422
+
+def test_ingest_whitespace_message():
+    payload = {
+        "source": "web-server-01",
+        "level": "ERROR",
+        "message": "   ",
+    }
+
+    response = client.post("/ingest", json = payload)
+
+    assert response.status_code == 422
 

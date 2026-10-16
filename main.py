@@ -5,12 +5,19 @@ from datetime import datetime, timezone
 from uuid import uuid4
 from copy import deepcopy
 from storage import MemoryStorage
+from pydantic import field_validator
 storage = MemoryStorage()
 
 class LogEvent(BaseModel):
     source: str = Field(min_length=1)
     level: Literal["DEBUG","INFO","WARNING","ERROR","CRITICAL"]
     message: str = Field(min_length=1)
+    @field_validator("source","message")
+    @classmethod
+    def reject_blank_text(cls,value: str) -> str:
+        if not value.strip():
+            raise ValueError("Field can't conatin only white spaces")
+        return value
 
 class NormalizedLog(BaseModel):
     event_id: str
