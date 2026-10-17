@@ -33,6 +33,33 @@ class NormalizedLog(BaseModel):
     message: str
     observed_at: datetime
 
+class Source(BaseModel):
+    source_id: str = Field(default_factory = lambda: str(uuid4()))
+    name: str = Field(min_length=1)
+    source_type : Literal["application", "server", "network", "database"]
+    created_at: datetime = Field(
+        default_factory =lambda: datetime.now(timezone.utc)
+    )
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls,value:str) -> str:
+        if not value.strip():
+            raise ValueError("Source name cannot be blanked.")
+        return value.strip()
+    
+class SourceCreate(BaseModel):
+    name: str = Field(min_length=1)
+    source_type: Literal["application", "server", "network", "database"]
+
+    @field_validator("name")
+    @classmethod
+
+    def validate_name(cls, value:str) -> str:
+        if not value.strip():
+            raise ValueError("Source name cannot be empty.")
+        return value.strip()
+
+
 def normalized_log(event: LogEvent, raw_event_id: str) -> NormalizedLog:
     return NormalizedLog(
         event_id = str(uuid4()),
@@ -283,9 +310,43 @@ async def ingest_csv_file(file: UploadFile = File(...)):
             "raw_event": raw_event,
             "event": normalized_data,
         })
-        
+
     return {
         "accepted": True,
         "count": len(result),
         "result": result
     }
+
+@app.post("/sources", status_code = 201)
+def create_source(source_data: SourceCreate):
+    source = Source(
+        name = source_data.name,
+        source_type = source_data.source_type,
+    )
+    try:
+        return storage.add_source(
+            source.model_dump(mode="json")
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=409,
+            detail = str(exc),
+        )from exc
+
+@app.get("/sources")
+def get_sources():
+    return{
+        "count": len(storage.list_sources()),
+        "sources": storage.list_sources(),
+    }
+
+@app.get("/sources/{source_id}")
+def get_source(source_id: str):
+    source = storage.get_source(source_id)
+
+    if source is None:
+        raise HTTPException(
+            status_code = 404,
+            detail = "Source not found.",
+        )
+    return source

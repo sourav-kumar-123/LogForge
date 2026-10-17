@@ -1,5 +1,6 @@
 from fastapi.testclient import TestClient
 from main import app
+from uuid import uuid4
 
 client =  TestClient(app)
 
@@ -231,5 +232,76 @@ def test_csv_ingestion_invalid_severity():
                            )
     assert response.status_code == 422
 
+def test_create_source():
+    response = client.post("/sources",
+                           json ={
+                                    "name": f"test-server-{uuid4()}",
+                                    "source_type": "server",
+                                 },
+                           )
+    assert response.status_code == 201
+    data = response.json()
 
+    assert data["source_id"]
+    assert data["name"].startswith("test-server-")
+    assert data["source_type"] == "server"
 
+def test_duplicate_source_name():
+    name = f"duplicate-test-{uuid4()}"
+
+    payload = {
+        "name": name,
+        "source_type": "server",
+    }
+
+    first_response = client.post("/sources",json = payload)
+    second_response = client.post("/sources",
+                                  json={
+                                            "name": name.upper(),
+                                            "source_type": "server",
+                                       },
+                                  )
+    
+    assert first_response.status_code == 201
+    assert second_response.status_code == 409
+
+def test_get_source_by_id():
+    create_response = client.post("/sources",
+                                  json={
+                                            "name": f"lookup-test-{uuid4()}",
+                                            "source_type": "application",
+                                       },
+                                  )
+
+    assert create_response.status_code == 201
+    source_id = create_response.json()["source_id"]
+
+    response = client.get(f"/sources/{source_id}")
+
+    assert response.status_code ==  200
+    assert response.json()["source_id"] == source_id
+
+def test_get_unknown_source():
+    response = client.get(f"/sources/{uuid4()}")
+    assert response.status_code == 404
+
+def test_list_sources():
+    name = f"list-test-{uuid4()}"
+    create_response = client.post("/sources",
+                                  json = {
+                                            "name": name,
+                                            "source_type": "database",
+                                         },
+                                  )
+    assert create_response.status_code == 201
+
+    response = client.get("sources")
+
+    assert response.status_code == 200
+
+    data = response.json()
+    assert data["count"] >= 1
+    assert any(
+        source["name"] == name
+        for source in data["sources"]
+    )
