@@ -188,5 +188,48 @@ def test_batch_ingestion_exceeds_maximum_size():
 
     assert response.status_code == 422
 
+def test_csv_ingestion():
+    csv_content = (
+        "source,level,message\n"
+        "web-server-01,ERROR,Database connection failed.\n"
+        "payment-service,WARNING,Payment response was slow.\n"
+        "auth-service,INFO,User log in successfully.\n"
+    )
+    response = client.post("/ingest/csv",
+                           files={
+                               "file": (
+                                   "sample_logs.csv",
+                                   csv_content,
+                                   "text/csv",
+                                        )
+                                },
+                           )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["accepted"] is True
+    assert data["count"] == 3
+    assert len(data["result"]) == 3
+
+    for item in data["result"]:
+        assert item["raw_event"]["raw_event_id"] == (
+            item["event"]["raw_event_id"]
+        )
+
+def test_csv_ingestion_invalid_severity():
+    csv_content = (
+        "source,level,message\n"
+        "web-server-01,URGENT,Invalid Severity\n"
+    )
+    response = client.post("/ingest/csv",
+                           files =  {
+                                        "file": (
+                                            "invalid.csv",
+                                            csv_content,
+                                            "text/csv",
+                                        )
+                                    },
+                           )
+    assert response.status_code == 422
+
 
 

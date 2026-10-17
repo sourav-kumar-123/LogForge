@@ -1,6 +1,7 @@
 import json
-from fastapi import UploadFile, File, HTTPException
-from fastapi import FastAPI, HTTPException
+import csv
+import io
+from fastapi import FastAPI, HTTPException, UploadFile, File
 from pydantic import BaseModel, Field
 from typing import Literal
 from datetime import datetime, timezone
@@ -207,7 +208,84 @@ async def ingest_json_file(file:UploadFile = File(...)):
         "result": result,
     }
 
+@app.post("/ingest/csv")
+async def ingest_csv_file(file: UploadFile = File(...)):
+    if not file.filename or not file.filename.lower().endswith(".csv"):
+        raise HTTPException(
+                status_code = 400,
+                detail = "Please Upload csv file.",
+        )
+    try:
+        content = await file.read()
+        text_content = content.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise HTTPException(
+            status_code = 400,
+            detail = "CSV file must be UTF-8 encoding.",
+        ) from exc
+    finally:
+        await file.close()
 
+    try:
+        reader = csv.DictReader(io.StringIO(text_content))
+        required_fields = {"source","level","message"}
+        headers = set(reader.fieldnames or [])
 
+        if not required_fields.issubset(headers):
+            raise HTTPException(
+                status_code = 422,
+                detail = "CSV must contain source, level, message columns",
+            )
+        rows = list(reader)
+
+    except csv.Error as exc:
+        raise HTTPException(
+            status_code = 400,
+            detail = "Couldn't parse csv file.",
+        ) from exc
+
+    if not rows:
+        raise HTTPException(
+            status_code = 422,
+            detail = "CSV file must contain atleast one long event.",
+        )
+    if len(rows)>100:
+        raise HTTPException(
+            status_code = 422,
+            detail = "Maximum 100 events allowed per file.",
+        )
+    try :
+        events = [LogEvent.model_validate(row) for row in rows]
+    except Exception as exc:
+        raise HTTPException(
+            status_code = 422,
+            detail = "one or more CSV log events has invalid fields.",
+        ) from exc
+
+    result = []
     
 
+    for event in events:
+        raw_event_id = str(uuid4())
+
+        raw_event = {
+            "raw_event_id": raw_event_id,
+            "received_at": datetime.now(timezone.utc).isoformat(),
+            "payload": deepcopy(event.model_dump()),
+        }
+        normalized_event = normalized_log(event,raw_event_id)
+        normalized_data = normalized_event.model_dump(mode = "json")
+
+        storage.save_raw(raw_event_id,raw_event)
+        storage.save_normalized(normalized_event.event_id,normalized_data)
+
+        result.append({
+            "raw_event": raw_event,
+            "event": normalized_data,
+        })
+        
+    return {
+        "accepted": True,
+        "count": len(result),
+        "result": result
+    }
