@@ -154,5 +154,39 @@ def test_batch_ingestion_empty_event():
     response = client.post("/ingest/batch", json = payload)
     assert response.status_code == 422
 
+def test_batch_ingestion_invalid_events():
+    payload = {
+        "events": [
+            {
+                "source": "web-server-01",
+                "level": "ERROR",
+                "message": "Database Connection failed",
+            },
+            {
+                "source": "payment-service",
+                "level": "URGENT",
+                "message": "Invalid severity",
+            },
+        ]
+    }
+
+    response = client.post("/ingest/batch",json = payload)
+
+    assert response.status_code == 422
+
+def test_batch_ingestion_exceeds_maximum_size():
+    events = [
+            {
+                "source": "web-server-01",
+                "level": "INFO",
+                "message": f"Test event {i}",
+            }
+            for i in range(101)
+    ]
+
+    response = client.post("/ingest/batch",json = {"events":events},)
+
+    assert response.status_code == 422
+
 
 
