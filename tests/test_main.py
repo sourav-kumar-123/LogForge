@@ -471,5 +471,136 @@ def test_csv_file_with_unknown_source_saves_nothing():
     assert len(storage.raw_logs) == raw_count_before
     assert len(storage.normalized_logs) == normalized_count_before
 
+def test_list_events_return_count_and_events():
+    source_name = f"day16-server-{uuid4()}"
+
+    source_response = client.post("/sources",
+                                  json = {
+                                            "name": source_name,
+                                            "source_type": "server",
+                                         }
+                                  ) 
+    assert source_response.status_code == 201
+
+    raw_count_before = len(storage.raw_logs)
+    normalized_count_before = len(storage.normalized_logs)
+
+    ingest_response = client.post("/ingest",
+                                  json = {
+                                            "source": source_name,
+                                            "level":"ERROR",
+                                            "message": "Day 16 Listing Text",
+                                         },
+                                  )
+    assert ingest_response.status_code == 200
+
+    response = client.get("/events")
+
+    assert response.status_code == 200
+
+    data = response.json()
+
+    assert data["count"] == normalized_count_before + 1
+    assert len(data["events"]) == data["count"]
+
+    assert any(
+        event["message"] == "Day 16 Listing Text"
+        for event in data["events"]
+    )
+
+    assert len(storage.raw_logs) == raw_count_before + 1
+
+def test_list_events_pagination():
+    response = client.get("/events?limit=2&offset=0")
+
+    assert response.status_code == 200
+
+    data = response.json()
+
+    assert data["limit"] == 2
+    assert data["offset"] == 0
+    assert data["count"] == min(2,data["total"])
+    assert len(data["events"]) == data["count"]
+
+def test_list_events_with_limit_and_offset():
+    response = client.get("/events?limit=2&offset=1")
+
+    assert response.status_code == 200
+
+    data = response.json()
+
+    assert data["limit"] == 2
+    assert data["offset"] == 1
+    assert len(data["events"]) == data["count"]
+    assert data["count"] <=2
+
+def test_list_events_rejects_invalid_limit():
+    response = client.get("/events?limit=0")
+    assert response.status_code == 422
+
+def test_list_events_reject_negative_offset():
+    response = client.get("/events?offset=-1")
+
+    assert response.status_code == 422 
+
+def test_list_event_filter_by_severity():
+    response = client.get("/events?severity=ERROR")
+
+    assert response.status_code == 200
+
+    data = response.json()
+
+    assert all(
+        event["severity"] == "ERROR"
+        for event in data["events"]
+    )
+
+def test_list_event_filtered_by_source():
+    source_name = f"day16-filter-{uuid4()}"
+
+    source_response = client.post("/sources",
+                                  json = {
+                                            "name": source_name,
+                                            "source_type": "server",
+                                         },
+                                  )
+    assert source_response.status_code == 201
+
+    ingest_response = client.post("/ingest",
+                                 json = {
+                                            "source": source_name,
+                                            "level": "ERROR",
+                                            "message": "source filter next."
+                                        },
+                                 )
+    assert ingest_response.status_code == 200
+
+    response = client.get(f"/events?source={source_name}")
+
+    assert response.status_code == 200
+
+    data = response.json()
+
+    print("\nEXPECTED SOURCE:", repr(source_name))
+    print("ACTUAL STATUS:", response.status_code)
+    print("ACTUAL RESPONSE:", response.json())
+
+    assert data["total"] >= 1
+    assert all(
+        event["source"].casefold() == source_name.casefold()
+        for event in data["events"]
+    )
+
+def test_list_events_rejects_invalid_severity():
+    response = client.get("/events?severity=INVALID")
+
+    print("STATUS:", response.status_code)
+    print("BODY:", response.text)
+
+    assert response.status_code == 422
+
+
+ 
+
     
 

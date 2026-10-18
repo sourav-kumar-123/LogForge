@@ -1,7 +1,7 @@
 import json
 import csv
 import io
-from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi import FastAPI, HTTPException, UploadFile, File, Query
 from pydantic import BaseModel, Field
 from typing import Literal
 from datetime import datetime, timezone
@@ -379,3 +379,34 @@ def get_source(source_id: str):
             detail = "Source not found.",
         )
     return source
+
+@app.get("/events")
+def list_events(
+    limit: int = Query(default=10, ge=1, le=100),
+    offset: int = Query(default=0,ge=0),
+    source: str | None = Query(default=None, min_length=1),
+    severity: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] | None = Query(default=None)
+):
+    all_events = storage.list_normalized()
+    if source is not None:
+        all_events = [
+            event for event in all_events
+            if event["source"].casefold() == source.strip().casefold()
+        ]
+
+    if severity is not None:
+        all_events = [
+            event for event in all_events
+            if event["severity"] == severity.upper()
+        ]
+
+    total = len(all_events)
+
+    paginated_events = all_events[offset:offset + limit]
+    return{
+        "count": len(paginated_events),
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "events": paginated_events,
+    }

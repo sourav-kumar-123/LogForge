@@ -46,3 +46,5 @@ class MemoryStorage:
             if source["name"].casefold() == target_name:
                 return deepcopy(source)
         return None
+    def list_normalized(self):
+        return deepcopy(list(self.normalized_logs.values()))
