@@ -667,8 +667,150 @@ def test_list_events_uses_event_id_for_equal_timestamps():
 
     assert returned_ids == sorted(event_ids,reverse=True)
 
+def test_list_events_returns_empty_for_unknown_sources():
+    source_name = f"day18-missing-{uuid4()}"
 
- 
+    response = client.get(f"/events?source={source_name}")
+
+    assert response.status_code == 200
+
+    data = response.json()
+
+    assert data["count"] == 0
+    assert data["total"] == 0
+    assert data["events"] == []
+
+def test_list_event_offset_equal_to_total():
+    source_name = f"day18-offset-{uuid4()}"
+
+    source_response = client.post("/sources",
+                                  json = {
+                                            "name": source_name,
+                                            "source_type": "server",
+                                         },
+                                  )
+    assert source_response.status_code == 201
+
+    for message in ["First event","Second event"]:
+        ingest_response = client.post("/ingest",
+                                      json = {
+                                                "source": source_name,
+                                                "level": "INFO",
+                                                "message": message,
+                                             },
+                                      )
+        assert ingest_response.status_code == 200
+
+    response = client.get(f"/events?source={source_name}&limit=10&offset=2")
+
+    assert response.status_code == 200
+
+    data = response.json()
+
+    assert data["total"] == 2
+    assert data["count"] == 0
+    assert data["events"] == []
+
+def test_list_events_offset_greater_than_total():
+    source_name = f"day18-large-offset{uuid4()}"
+
+    source_response = client.post("/sources",
+                                  json = {
+                                            "name": source_name,
+                                            "source_type": "server",
+                                         },
+                                  )
+    assert source_response.status_code == 201
+
+    ingest_response = client.post("/ingest",
+                                  json = {
+                                            "source": source_name,
+                                            "level": "INFO",
+                                            "message": "Single Event",
+                                         },
+                                  )
+    assert ingest_response.status_code == 200
+
+    response = client.get(f"/events?source={source_name}&limit=10&offset=5")
+
+    assert response.status_code == 200
+
+    data = response.json()
+    assert data["total"] == 1
+    assert data["count"] == 0
+    assert data["events"] == []
+
+def test_list_events_accepts_maximum_limit():
+    response = client.get("/events?limit=100")
+
+    assert response.status_code == 200
+
+    data = response.json()
+
+    assert data["limit"] == 100
+    assert data["count"] <= 100
+    assert len(data["events"]) == data["count"]
+
+def test_list_events_rejects_limit_above_maximum():
+    response = client.get("/events?limit=101")
+    assert response.status_code == 422
+
+def test_list_events_combines_source_severity_and_pagination():
+    source_name  = f"day18-combined-{uuid4()}"
+    source_response = client.post("/sources",
+                                  json = {
+                                            "name": source_name,
+                                            "source_type": "server",
+                                         },
+                                    )
+    assert source_response.status_code == 201
+
+    events = [
+        ("INFO","info event 1"),
+        ("ERROR","error event 1"),
+        ("ERROR","error event 2"),
+        ("WARNING","warning event 1"),
+    ]
+    for level,message in events:
+        response = client.post("/ingest",
+                               json = {
+                                        "source": source_name,
+                                        "level": level,
+                                        "message": message,
+                                      },
+                               )
+        assert response.status_code == 200
+    response = client.get(f"/events?source={source_name}&severity=ERROR&limit=1&offset=0")
+    assert response.status_code == 200
+
+    data = response.json()
+
+    assert data["total"] == 2
+    assert data["count"] == 1
+    assert len(data["events"]) == 1
+    assert data["events"][0]["source"].casefold() == source_name.casefold()
+    assert data["events"][0]["severity"] == "ERROR"
+    assert data["limit"] == 1
+    assert data["offset"] == 0
+
+def test_list_events_response_pagination_metadata_is_consistent():
+    response = client.get("/events?limit=5&offset=0")
+    assert response.status_code == 200
+
+    data = response.json()
+
+    assert "count" in data
+    assert "total" in data
+    assert "limit" in data
+    assert "offset" in data
+    assert "limit" in data
+
+    assert data["count"] == len(data["events"])
+    assert data["total"] >= data["count"]
+    assert data["limit"] == 5
+    assert data["offset"] == 0
+
+  
 
     
 
