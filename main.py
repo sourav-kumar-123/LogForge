@@ -95,6 +95,13 @@ def health_check():
 
 @app.post("/ingest")
 def ingest_log(event: LogEvent):
+    registered_source = storage.get_source_by_name(event.source)
+    if registered_source is None:
+        raise HTTPException(
+            status_code = 422,
+            detail = f"Source, '{event.source}' is not registered."
+        )
+    
     raw_event_id = str(uuid4())
     raw_event = {
         "raw_event_id": raw_event_id, 
@@ -141,6 +148,13 @@ class BatchLogRequest(BaseModel):
 
 @app.post("/ingest/batch")
 def ingest_batch(request: BatchLogRequest):
+    for event in request.events:
+        registered_source = storage.get_source_by_name(event.source)
+        if registered_source is None:
+            raise HTTPException(
+                status_code = 422,
+                detail = f"Source,'{event.source}' is not registered."
+            )
     result = []
 
     for event in request.events:
@@ -205,6 +219,14 @@ async def ingest_json_file(file:UploadFile = File(...)):
             status_code = 422,
             detail = "One or more log events are invalid fields."
         ) from esc
+    
+    for event in events:
+        registered_source = storage.get_source_by_name(event.source)
+        if registered_source is None:
+            raise HTTPException(
+                status_code = 422,
+                detail = f"Source, '{event.source}' is not registered.",
+            )
 
     result = []
     for event in events:
@@ -288,6 +310,13 @@ async def ingest_csv_file(file: UploadFile = File(...)):
             status_code = 422,
             detail = "one or more CSV log events has invalid fields.",
         ) from exc
+    for event in events:
+        registered_source = storage.get_source_by_name(event.source)
+        if registered_source is None:
+            raise HTTPException(
+                status_code = 422,
+                detail = f"Source, '{event.source}' is not registered.",
+            )
 
     result = []
     

@@ -18,6 +18,15 @@ def test_ingest_valid_log():
         "message": "Database Connection failed",
 
     }
+    source_response = client.post(
+        "/sources",
+        json={
+            "name": payload["source"],
+            "source_type": "server",
+        },
+    )
+
+    assert source_response.status_code in (201,409)
 
     response = client.post("/ingest", json = payload)
 
@@ -40,6 +49,14 @@ def test_raw_and_normalized_event_linkage():
         "level": "ERROR",
         "message": "Database Connection Failed"
     }
+    source_response = client.post(
+            "/sources",
+            json={
+                "name": payload["source"],
+                "source_type": "server",
+            },
+        )
+    assert source_response.status_code in (201,409)
 
     response = client.post("/ingest",json=payload)
 
@@ -60,6 +77,14 @@ def test_normalized_event_retrieval():
         "level": "ERROR",
         "message": "Database Connection failed",
     }
+    source_response = client.post(
+                "/sources",
+                json={
+                    "name": payload["source"],
+                    "source_type": "server",
+                },
+            )
+    assert source_response.status_code in (201,409)
 
     ingest_response = client.post("/ingest", json = payload)
     assert ingest_response.status_code == 200
@@ -132,6 +157,20 @@ def test_batch_ingestion():
             },
         ]
     }
+    for event in payload["events"]:
+        source_response = client.post(
+            "/sources",
+            json={
+                "name": event["source"],
+                "source_type": (
+                    "application"
+                    if event["source"] == "payment-service"
+                    else "server"
+                ),
+            },
+        )
+
+    assert source_response.status_code in (201, 409)
 
     response = client.post("/ingest/batch", json = payload)
 
@@ -196,6 +235,19 @@ def test_csv_ingestion():
         "payment-service,WARNING,Payment response was slow.\n"
         "auth-service,INFO,User log in successfully.\n"
     )
+    for source_name, source_type in [
+        ("web-server-01","server"),
+        ("payment-service","application"),
+        ("auth-service","application"),
+    ]:
+        source_response = client.post("/sources",
+                                      json = {
+                                                "name": source_name,
+                                                "source_type": source_type,
+                                             },
+                                      )
+        assert source_response.status_code in (201,409)
+
     response = client.post("/ingest/csv",
                            files={
                                "file": (
