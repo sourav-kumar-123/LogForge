@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
-from main import app
+from main import app, storage
 from uuid import uuid4
+import json
 
 client =  TestClient(app)
 
@@ -357,3 +358,118 @@ def test_list_sources():
         source["name"] == name
         for source in data["sources"]
     )
+
+def test_batch_with_unknown_source_saves_nothing():
+    valid_source = f"test-server-{uuid4()}"
+    source_response = client.post("/sources",
+                                  json = {
+                                            "name": valid_source,
+                                            "source_type": "server",
+                                         }
+                                  )
+    assert source_response.status_code == 201
+    raw_count_before = len(storage.raw_logs)
+    normalized_count_before = len(storage.normalized_logs)
+
+    payload = {
+        "events":[
+        {
+            "source": valid_source,
+            "level": "ERROR",
+            "message": "Valid event",
+        },
+
+        {
+            "source": f"unknown-{uuid4()}",
+            "level": "WARNING",
+            "message": "Unknown Source Event",
+        },
+        ]
+
+    }
+    response = client.post("/ingest/batch", json = payload)
+
+    assert response.status_code == 422
+    assert len(storage.raw_logs) == raw_count_before
+    assert len(storage.normalized_logs) == normalized_count_before
+
+def test_json_file_with_unknown_source_saves_nothing():
+    valid_source = f"json-server-{uuid4()}"
+    source_response = client.post("/sources",
+                                  json = {
+                                            "name": valid_source,
+                                            "source_type": "server",
+                                         }
+                                  )
+    assert source_response.status_code == 201
+
+    raw_count_before = len(storage.raw_logs)
+    normalized_count_before = len(storage.normalized_logs)
+
+    payload = {
+        "events":[
+            {
+                "source": valid_source,
+                "level": "ERROR",
+                "message": "Valid JSON event",
+            },
+
+            {
+                "source": f"unknown-{uuid4()}",
+                "level":"WARNING",
+                "message": "event with unknown source",
+            },
+        ]
+        
+    }
+
+    response = client.post("/ingest/file",
+                           files={
+                               "file": (
+                                   "logs.json",
+                                   json.dumps(payload),
+                                   "application/json"
+                               )
+                           },
+                           
+                           )
+    assert response.status_code == 422
+    assert len(storage.raw_logs) == raw_count_before
+    assert len(storage.normalized_logs) == normalized_count_before
+
+def test_csv_file_with_unknown_source_saves_nothing():
+    valid_source = f"csv-server-{uuid4()}"
+
+    source_response = client.post("/sources",
+                                  json = {
+                                            "name": valid_source,
+                                            "source_type": "server",
+                                         }
+                                  )
+    assert source_response.status_code == 201
+
+    raw_count_before = len(storage.raw_logs)
+    normalized_count_before = len(storage.normalized_logs)
+
+    csv_content = (
+        "source, level, message\n"
+        f"{valid_source},ERROR, Valid csv error\n"
+        f"unknown-{uuid4()},WARNING,unknown source event\n"
+
+    )
+
+    response = client.post("/ingest/csv",
+                           files={
+                               "file": (
+                                   "logs.csv",
+                                   csv_content,
+                                   "text/csv",
+                               )
+                           },
+                        )
+    assert response.status_code == 422
+    assert len(storage.raw_logs) == raw_count_before
+    assert len(storage.normalized_logs) == normalized_count_before
+
+    
+
