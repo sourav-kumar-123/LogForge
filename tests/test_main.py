@@ -599,6 +599,74 @@ def test_list_events_rejects_invalid_severity():
 
     assert response.status_code == 422
 
+def test_list_events_returns_newest_events_first():
+    source_name = f"day17-order-{uuid4()}"
+
+    source_response = client.post("/sources",
+                                 json = {
+                                            "name": source_name,
+                                            "source_type": "server",
+                                        },
+                                 )
+    assert source_response.status_code == 201
+
+    for message in [
+        "First ordering event",
+        "Second ordering event",
+        "Third ordering event",
+    ]:
+        response = client.post("/ingest",
+                               json ={
+                                        "source": source_name,
+                                        "level": "INFO",
+                                        "message": message,
+                                     },
+                               )
+        assert response.status_code == 200
+    
+    response = client.get(f"/events?source = {source_name}&limit=10")
+
+    assert response.status_code == 200
+
+    events = response.json()["events"]
+
+    timestamps = [event["observed_at"] for event in events]
+    assert timestamps == sorted(timestamps,reverse =True) 
+
+def test_list_events_uses_event_id_for_equal_timestamps():
+    source_name = f"day17-tie-{uuid4()}"
+    timestamp = "2026-10-18T12:00:00+00:00"
+
+    event_ids = [
+        "day17-event-a",
+        "day17-event-c",
+        "day17-event-b",
+    ]
+
+    for event_id in event_ids:
+        storage.save_normalized(
+            event_id,
+            {
+                "event_id": event_id,
+                "raw_event_id": f"raw-{event_id}",
+                "schema_version": "1.0",
+                "source": source_name,
+                "severity": "INFO",
+                "message": f"messages for {event_id}",
+                "observed_at": timestamp,
+            },
+        )
+    response = client.get(f"/events?source={source_name}&limit=10")
+
+    
+
+    assert response.status_code == 200
+    events = response.json()["events"]
+
+    returned_ids = [event["event_id"] for event in events]
+
+    assert returned_ids == sorted(event_ids,reverse=True)
+
 
  
 

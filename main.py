@@ -388,6 +388,14 @@ def list_events(
     severity: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] | None = Query(default=None)
 ):
     all_events = storage.list_normalized()
+
+    all_events.sort(
+        key=lambda event: (
+            event["observed_at"],
+            event["event_id"],
+        ),
+        reverse =  True,
+    )
     if source is not None:
         all_events = [
             event for event in all_events
