@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
 from main import app, storage
 from uuid import uuid4
+from db import save_raw, save_normalized
 import json
 
 client =  TestClient(app)
@@ -482,34 +483,31 @@ def test_list_events_return_count_and_events():
                                   ) 
     assert source_response.status_code == 201
 
-    raw_count_before = len(storage.raw_logs)
-    normalized_count_before = len(storage.normalized_logs)
-
     ingest_response = client.post("/ingest",
                                   json = {
                                             "source": source_name,
                                             "level":"ERROR",
-                                            "message": "Day 16 Listing Text",
+                                            "message": "Day 16 Listing text",
                                          },
                                   )
     assert ingest_response.status_code == 200
 
-    response = client.get("/events")
+    ingest_data = ingest_response.json()
+    raw_event_id  = ingest_data["raw_event"]["raw_event_id"]
 
+    raw_response = client.get(f"/raw/{raw_event_id}")
+    assert raw_response.status_code == 200
+
+    response = client.get(f"/events?source={source_name}&limit=10")
     assert response.status_code == 200
 
     data = response.json()
 
-    assert data["count"] == normalized_count_before + 1
-    assert len(data["events"]) == data["count"]
-
-    assert any(
-        event["message"] == "Day 16 Listing Text"
-        for event in data["events"]
-    )
-
-    assert len(storage.raw_logs) == raw_count_before + 1
-
+    assert data["count"] == 1
+    assert data["total"] == 1
+    assert len(data["events"]) == 1
+    assert data["events"][0]["message"] == "Day 16 Listing text"
+    assert data["events"][0]["source"] == source_name 
 def test_list_events_pagination():
     response = client.get("/events?limit=2&offset=0")
 
@@ -633,39 +631,60 @@ def test_list_events_returns_newest_events_first():
     timestamps = [event["observed_at"] for event in events]
     assert timestamps == sorted(timestamps,reverse =True) 
 
+
 def test_list_events_uses_event_id_for_equal_timestamps():
     source_name = f"day17-tie-{uuid4()}"
     timestamp = "2026-10-18T12:00:00+00:00"
 
-    event_ids = [
-        "day17-event-a",
-        "day17-event-c",
-        "day17-event-b",
-    ]
+    source_response = client.post(
+        "/sources",
+        json={
+            "name": source_name,
+            "source_type": "server",
+        },
+    )
+    assert source_response.status_code == 201
+
+    event_ids = [str(uuid4()) for _ in range(3)]
 
     for event_id in event_ids:
-        storage.save_normalized(
-            event_id,
+        raw_event_id = str(uuid4())
+
+        raw_event = {
+            "raw_event_id": raw_event_id,
+            "recieved_at": timestamp,
+            "payload": {
+                "source": source_name,
+                "level": "INFO",
+                "message": f"message for {event_id}",
+            },
+        }
+
+        save_raw(raw_event_id, raw_event)
+
+        save_normalized(
             {
                 "event_id": event_id,
-                "raw_event_id": f"raw-{event_id}",
+                "raw_event_id": raw_event_id,
                 "schema_version": "1.0",
                 "source": source_name,
                 "severity": "INFO",
-                "message": f"messages for {event_id}",
+                "message": f"message for {event_id}",
                 "observed_at": timestamp,
-            },
+            }
         )
-    response = client.get(f"/events?source={source_name}&limit=10")
 
-    
+    response = client.get(
+        f"/events?source={source_name}&limit=10"
+    )
 
     assert response.status_code == 200
-    events = response.json()["events"]
 
+    events = response.json()["events"]
     returned_ids = [event["event_id"] for event in events]
 
-    assert returned_ids == sorted(event_ids,reverse=True)
+    assert returned_ids == sorted(event_ids, reverse=True)
+
 
 def test_list_events_returns_empty_for_unknown_sources():
     source_name = f"day18-missing-{uuid4()}"

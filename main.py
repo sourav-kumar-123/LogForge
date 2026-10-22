@@ -10,6 +10,18 @@ from copy import deepcopy
 from storage import MemoryStorage
 from pydantic import field_validator
 from typing import List
+from db import (
+    create_source as db_create_source,
+    list_sources as db_list_sources,
+    get_source_by_name as db_get_source_by_name,
+    save_raw as db_save_raw,
+    save_normalized as db_save_normalized,
+    get_raw as db_get_raw,
+    get_normalized as db_get_normalized,
+    list_normalized as db_list_normalized,
+    get_source as db_get_source,
+
+)
 
 storage = MemoryStorage()
 
@@ -95,7 +107,7 @@ def health_check():
 
 @app.post("/ingest")
 def ingest_log(event: LogEvent):
-    registered_source = storage.get_source_by_name(event.source)
+    registered_source = db_get_source_by_name(event.source)
     if registered_source is None:
         raise HTTPException(
             status_code = 422,
@@ -112,9 +124,21 @@ def ingest_log(event: LogEvent):
 
     normalized_event = normalized_log(event,raw_event_id)
 
-    storage.save_raw(raw_event_id,raw_event)
     normalized_data = normalized_event.model_dump(mode = "json")
-    storage.save_normalized(normalized_event.event_id, normalized_data)
+    
+
+    try:
+        db_save_raw(raw_event_id, raw_event)
+        
+        db_save_normalized(normalized_data)
+
+    except Exception as exc:
+        print("PostgreSQL persistence error:", repr(exc))
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to persist log event.",
+        ) from exc
+
 
     return{
         "accepted": True,
@@ -125,7 +149,7 @@ def ingest_log(event: LogEvent):
 
 @app.get("/raw/{raw_event_id}")
 def get_raw_logs(raw_event_id:str):
-    raw_event = storage.get_raw(raw_event_id)
+    raw_event = db_get_raw(raw_event_id)
     if raw_event is None: 
         raise HTTPException(
             status_code = 404,
@@ -135,7 +159,7 @@ def get_raw_logs(raw_event_id:str):
 
 @app.get("/events/{event_id}")
 def get_normalized_event(event_id:str):
-    normalized_event = storage.get_normalized(event_id)
+    normalized_event = db_get_normalized(event_id)
     if normalized_event is None:
         raise HTTPException(
             status_code =404,
@@ -149,7 +173,7 @@ class BatchLogRequest(BaseModel):
 @app.post("/ingest/batch")
 def ingest_batch(request: BatchLogRequest):
     for event in request.events:
-        registered_source = storage.get_source_by_name(event.source)
+        registered_source = db_get_source_by_name(event.source)
         if registered_source is None:
             raise HTTPException(
                 status_code = 422,
@@ -169,8 +193,8 @@ def ingest_batch(request: BatchLogRequest):
 
         normalized_event = normalized_log(event,raw_event_id)
         normalized_data = normalized_event.model_dump(mode = "json")
-        storage.save_raw(raw_event_id,raw_event)
-        storage.save_normalized(normalized_event.event_id,normalized_data)
+        db_save_raw(raw_event_id,raw_event)
+        db_save_normalized(normalized_data)
 
         result.append({
             "raw_event": raw_event,
@@ -221,7 +245,7 @@ async def ingest_json_file(file:UploadFile = File(...)):
         ) from esc
     
     for event in events:
-        registered_source = storage.get_source_by_name(event.source)
+        registered_source = db_get_source_by_name(event.source)
         if registered_source is None:
             raise HTTPException(
                 status_code = 422,
@@ -241,8 +265,8 @@ async def ingest_json_file(file:UploadFile = File(...)):
         normalized_event = normalized_log(event, raw_event_id)
         normalized_data = normalized_event.model_dump(mode = "json")
 
-        storage.save_raw(raw_event_id,raw_event)
-        storage.save_normalized(normalized_event.event_id, normalized_data,)
+        db_save_raw(raw_event_id,raw_event)
+        db_save_normalized(normalized_data)
 
         result.append(
             {
@@ -311,7 +335,7 @@ async def ingest_csv_file(file: UploadFile = File(...)):
             detail = "one or more CSV log events has invalid fields.",
         ) from exc
     for event in events:
-        registered_source = storage.get_source_by_name(event.source)
+        registered_source = db_get_source_by_name(event.source)
         if registered_source is None:
             raise HTTPException(
                 status_code = 422,
@@ -332,8 +356,8 @@ async def ingest_csv_file(file: UploadFile = File(...)):
         normalized_event = normalized_log(event,raw_event_id)
         normalized_data = normalized_event.model_dump(mode = "json")
 
-        storage.save_raw(raw_event_id,raw_event)
-        storage.save_normalized(normalized_event.event_id,normalized_data)
+        db_save_raw(raw_event_id,raw_event)
+        db_save_normalized(normalized_data)
 
         result.append({
             "raw_event": raw_event,
@@ -348,30 +372,28 @@ async def ingest_csv_file(file: UploadFile = File(...)):
 
 @app.post("/sources", status_code = 201)
 def create_source(source_data: SourceCreate):
-    source = Source(
-        name = source_data.name,
-        source_type = source_data.source_type,
-    )
     try:
-        return storage.add_source(
-            source.model_dump(mode="json")
+        return db_create_source(
+            name=source_data.name,
+            source_type=source_data.source_type 
         )
-    except Exception as exc:
+    except ValueError as exc:
         raise HTTPException(
             status_code=409,
-            detail = str(exc),
+            detail=str(exc),
         )from exc
 
 @app.get("/sources")
 def get_sources():
+    sources = db_list_sources()
     return{
-        "count": len(storage.list_sources()),
-        "sources": storage.list_sources(),
+        "count": len(sources),
+        "sources": sources,
     }
 
 @app.get("/sources/{source_id}")
 def get_source(source_id: str):
-    source = storage.get_source(source_id)
+    source = db_get_source(source_id)
 
     if source is None:
         raise HTTPException(
@@ -387,7 +409,7 @@ def list_events(
     source: str | None = Query(default=None, min_length=1),
     severity: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] | None = Query(default=None)
 ):
-    all_events = storage.list_normalized()
+    all_events = db_list_normalized()
 
     all_events.sort(
         key=lambda event: (
