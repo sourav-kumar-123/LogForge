@@ -19,7 +19,7 @@ def get_db_connection():
 def test_database_connection():
     with get_db_connection() as connection:
         with connection.cursor() as cursor:
-            cursor.execute("SELECT Current databse.")
+            cursor.execute("SELECT current_database();")
             return cursor.fetchone()[0]
 
 def create_source(name: str, source_type:str) -> dict:
