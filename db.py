@@ -410,3 +410,62 @@ def save_log_batch(events: list[dict]) -> None:
                         normalized_event["observed_at"],
                     ),
                 )
+
+def list_normalized_page(
+    limit: int,
+    offset: int,
+    source: str | None = None,
+    severity: str | None = None,
+) -> tuple[list[dict], int]:
+    conditions = []
+    params = []
+
+    if source is not None:
+        conditions.append("LOWER(source) = LOWER(%s)")
+        params.append(source.strip())
+
+    if severity is not None:
+        conditions.append("severity = %s")
+        params.append(severity.upper())
+
+    where_clause = (
+        " WHERE " + " AND ".join(conditions)
+        if conditions
+        else ""
+    )
+
+    with get_db_connection() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f"SELECT COUNT(*) FROM normalized_logs{where_clause}",
+                tuple(params),
+            )
+            total = cursor.fetchone()[0]
+
+            cursor.execute(
+                f"""
+                SELECT event_id, raw_event_id, schema_version,
+                       source, severity, message, observed_at
+                FROM normalized_logs
+                {where_clause}
+                ORDER BY observed_at DESC, event_id DESC
+                LIMIT %s OFFSET %s
+                """,
+                (*params, limit, offset),
+            )
+            rows = cursor.fetchall()
+
+    events = [
+        {
+            "event_id": row[0],
+            "raw_event_id": row[1],
+            "schema_version": row[2],
+            "source": row[3],
+            "severity": row[4],
+            "message": row[5],
+            "observed_at": row[6],
+        }
+        for row in rows
+    ]
+
+    return events, total

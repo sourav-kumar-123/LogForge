@@ -39,6 +39,7 @@ from db import (
     save_log_event as db_save_log_event,
     save_log_batch as db_save_log_batch,
     get_db_connection as db_get_connection,
+    list_normalized_page as db_list_normalized_page,
 
 )
 
@@ -780,31 +781,14 @@ def list_events(
     source: str | None = Query(default=None, min_length=1),
     severity: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] | None = Query(default=None)
 ):
-    all_events = db_list_normalized()
-
-    all_events.sort(
-        key=lambda event: (
-            event["observed_at"],
-            event["event_id"],
-        ),
-        reverse =  True,
+    paginated_events, total = db_list_normalized_page(
+        limit=limit,
+        offset=offset,
+        source=source,
+        severity=severity,
     )
-    if source is not None:
-        all_events = [
-            event for event in all_events
-            if event["source"].casefold() == source.strip().casefold()
-        ]
 
-    if severity is not None:
-        all_events = [
-            event for event in all_events
-            if event["severity"] == severity.upper()
-        ]
-
-    total = len(all_events)
-
-    paginated_events = all_events[offset:offset + limit]
-    return{
+    return {
         "count": len(paginated_events),
         "total": total,
         "limit": limit,

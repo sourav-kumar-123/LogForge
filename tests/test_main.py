@@ -1461,3 +1461,84 @@ def test_request_size_limit():
     )
 
     assert response.status_code == 413
+
+
+def test_json_file_upload_rejects_invalid_json():
+    response = client.post(
+        "/ingest/file",
+        files={
+            "file": (
+                "invalid.json",
+                "{invalid json}",
+                "application/json",
+            )
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Invalid JSON File"
+
+
+def test_json_file_upload_rejects_wrong_extension():
+    response = client.post(
+        "/ingest/file",
+        files={
+            "file": (
+                "logs.txt",
+                "[]",
+                "text/plain",
+            )
+        },
+    )
+
+    assert response.status_code == 400
+
+
+def test_csv_file_upload_rejects_missing_columns():
+    response = client.post(
+        "/ingest/csv",
+        files={
+            "file": (
+                "logs.csv",
+                "source,message\nserver-1,Failed\n",
+                "text/csv",
+            )
+        },
+    )
+
+    assert response.status_code == 422
+    assert "source, level, message" in response.json()["detail"]
+
+
+def test_json_file_upload_exceeds_request_size_limit():
+    oversized_content = b"x" * (1024 * 1024 + 1)
+
+    response = client.post(
+        "/ingest/file",
+        files={
+            "file": (
+                "large.json",
+                oversized_content,
+                "application/json",
+            )
+        },
+    )
+
+    assert response.status_code == 413
+
+
+def test_csv_file_upload_exceeds_request_size_limit():
+    oversized_content = b"x" * (1024 * 1024 + 1)
+
+    response = client.post(
+        "/ingest/csv",
+        files={
+            "file": (
+                "large.csv",
+                oversized_content,
+                "text/csv",
+            )
+        },
+    )
+
+    assert response.status_code == 413
