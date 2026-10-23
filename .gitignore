@@ -1,15 +1,24 @@
-# Python virtual environment
-.venv/
+# Environment and secrets
+.env
+.env.*
+!.env.example
 
-# Python cache
+# Python
 __pycache__/
 *.py[cod]
+*.pyd
+.venv/
+venv/
 
-# Environment variables and secrets
-.env
-
-# Testing cache
+# Testing and coverage
 .pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
 
-# VS Code local settings
+# IDE
 .vscode/
+
+# OS files
+.DS_Store
+Thumbs.db

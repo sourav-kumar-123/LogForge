@@ -1,7 +1,12 @@
+import main
+import logging
 from fastapi.testclient import TestClient
 from main import app, storage
 from uuid import uuid4
-from db import save_raw, save_normalized
+from unittest.mock import patch
+from db import (save_raw, save_normalized,
+                get_raw, get_normalized,)
+from datetime import datetime, timezone
 import json
 
 client =  TestClient(app)
@@ -829,7 +834,630 @@ def test_list_events_response_pagination_metadata_is_consistent():
     assert data["limit"] == 5
     assert data["offset"] == 0
 
-  
 
-    
+def test_ingest_rolls_back_raw_event_if_normalized_insert_fails():
+    from unittest.mock import patch
+    import main
+    from db import save_raw, save_normalized, get_raw
 
+    source_name = f"rollback-test-{uuid4()}"
+
+    source_response = client.post(
+        "/sources",
+        json={
+            "name": source_name,
+            "source_type": "server",
+        },
+    )
+    assert source_response.status_code == 201
+
+    existing_raw_id = str(uuid4())
+
+    save_raw(
+        existing_raw_id,
+        {
+            "raw_event_id": existing_raw_id,
+            "recieved_at": datetime.now(timezone.utc).isoformat(),
+            "payload": {
+                "source": source_name,
+                "level": "INFO",
+                "message": "Existing event",
+            },
+        },
+    )
+
+    duplicate_event_id = str(uuid4())
+
+    save_normalized({
+        "event_id": duplicate_event_id,
+        "raw_event_id": existing_raw_id,
+        "schema_version": "1.0",
+        "source": source_name,
+        "severity": "INFO",
+        "message": "Existing event",
+        "observed_at": datetime.now(timezone.utc),
+    })
+
+    captured = {}
+    original_save = main.db_save_log_event
+    original_normalized_log = main.normalized_log
+
+    def force_duplicate_event_id(event, raw_event_id):
+        normalized = original_normalized_log(event, raw_event_id)
+        normalized.event_id = duplicate_event_id
+        return normalized
+
+    def capture_raw_id(raw_event_id, raw_event, normalized_data):
+        captured["raw_event_id"] = raw_event_id
+        return original_save(raw_event_id, raw_event, normalized_data)
+
+    with (
+        patch.object(
+            main,
+            "normalized_log",
+            side_effect=force_duplicate_event_id,
+        ),
+        patch.object(
+            main,
+            "db_save_log_event",
+            side_effect=capture_raw_id,
+        ),
+    ):
+        response = client.post(
+            "/ingest",
+            json={
+                "source": source_name,
+                "level": "ERROR",
+                "message": "This event should roll back",
+            },
+        )
+
+    assert response.status_code == 500
+
+    failed_raw_id = captured["raw_event_id"]
+
+    assert get_raw(failed_raw_id) is None
+
+    assert get_raw(existing_raw_id) is not None
+
+
+def test_batch_ingestion_rolls_back_all_events_on_failure():
+
+    source_name = f"batch-rollback-{uuid4()}"
+
+    source_response = client.post(
+        "/sources",
+        json={
+            "name": source_name,
+            "source_type": "server",
+        },
+    )
+    assert source_response.status_code == 201
+
+    duplicate_event_id = str(uuid4())
+    captured_batch = {}
+    original_normalized_log = main.normalized_log
+    original_save_batch = main.db_save_log_batch
+
+    def duplicate_normalized_id(event, raw_event_id):
+        normalized = original_normalized_log(event, raw_event_id)
+        normalized.event_id = duplicate_event_id
+        return normalized
+
+    def capture_and_save_batch(events):
+        captured_batch["events"] = events
+        return original_save_batch(events)
+
+    payload = {
+        "events": [
+            {
+                "source": source_name,
+                "level": "ERROR",
+                "message": "First rollback test event",
+            },
+            {
+                "source": source_name,
+                "level": "WARNING",
+                "message": "Second rollback test event",
+            },
+        ]
+    }
+
+    with (
+        patch.object(
+            main,
+            "normalized_log",
+            side_effect=duplicate_normalized_id,
+        ),
+        patch.object(
+            main,
+            "db_save_log_batch",
+            side_effect=capture_and_save_batch,
+        ),
+    ):
+        response = client.post("/ingest/batch", json=payload)
+
+    assert response.status_code == 500
+
+    attempted_events = captured_batch["events"]
+    assert len(attempted_events) == 2
+
+    for item in attempted_events:
+        raw_event_id = item["raw_event"]["raw_event_id"]
+        assert get_raw(raw_event_id) is None
+
+    assert get_normalized(duplicate_event_id) is None
+
+
+def test_csv_ingestion_rolls_back_all_events_on_failure():
+    from unittest.mock import patch
+    import main
+    from db import get_raw, get_normalized
+
+    source_name = f"csv-rollback-{uuid4()}"
+
+    source_response = client.post(
+        "/sources",
+        json={
+            "name": source_name,
+            "source_type": "server",
+        },
+    )
+    assert source_response.status_code == 201
+
+    csv_content = (
+        "source,level,message\n"
+        f"{source_name},ERROR,First CSV event\n"
+        f"{source_name},WARNING,Second CSV event\n"
+    )
+
+    duplicate_event_id = str(uuid4())
+    captured = {}
+    original_normalized_log = main.normalized_log
+    original_save_batch = main.db_save_log_batch
+
+    def duplicate_event_id_for_test(event, raw_event_id):
+        normalized = original_normalized_log(event, raw_event_id)
+        normalized.event_id = duplicate_event_id
+        return normalized
+
+    def capture_and_save(events):
+        captured["events"] = events
+        return original_save_batch(events)
+
+    with (
+        patch.object(
+            main,
+            "normalized_log",
+            side_effect=duplicate_event_id_for_test,
+        ),
+        patch.object(
+            main,
+            "db_save_log_batch",
+            side_effect=capture_and_save,
+        ),
+    ):
+        response = client.post(
+            "/ingest/csv",
+            files={
+                "file": (
+                    "rollback.csv",
+                    csv_content,
+                    "text/csv",
+                )
+            },
+        )
+
+    assert response.status_code == 500
+
+    attempted_events = captured["events"]
+    assert len(attempted_events) == 2
+
+    for item in attempted_events:
+        raw_event_id = item["raw_event"]["raw_event_id"]
+        assert get_raw(raw_event_id) is None
+
+    assert get_normalized(duplicate_event_id) is None
+
+
+def test_json_file_ingestion_rolls_back_all_events_on_failure():
+
+    source_name = f"json-rollback-{uuid4()}"
+
+    source_response = client.post(
+        "/sources",
+        json={
+            "name": source_name,
+            "source_type": "server",
+        },
+    )
+    assert source_response.status_code == 201
+
+    payload = [
+        {
+            "source": source_name,
+            "level": "ERROR",
+            "message": "First JSON event",
+        },
+        {
+            "source": source_name,
+            "level": "WARNING",
+            "message": "Second JSON event",
+        },
+    ]
+
+    duplicate_event_id = str(uuid4())
+    captured = {}
+
+    original_normalized_log = main.normalized_log
+    original_save_batch = main.db_save_log_batch
+
+    def duplicate_event_id_for_test(event, raw_event_id):
+        normalized = original_normalized_log(event, raw_event_id)
+        normalized.event_id = duplicate_event_id
+        return normalized
+
+    def capture_and_save(events):
+        captured["events"] = events
+        return original_save_batch(events)
+
+    with (
+        patch.object(
+            main,
+            "normalized_log",
+            side_effect=duplicate_event_id_for_test,
+        ),
+        patch.object(
+            main,
+            "db_save_log_batch",
+            side_effect=capture_and_save,
+        ),
+    ):
+        response = client.post(
+            "/ingest/file",
+            files={
+                "file": (
+                    "rollback.json",
+                    json.dumps(payload),
+                    "application/json",
+                )
+            },
+        )
+
+    assert response.status_code == 500
+
+    attempted_events = captured["events"]
+    assert len(attempted_events) == 2
+
+    for item in attempted_events:
+        raw_event_id = item["raw_event"]["raw_event_id"]
+        assert get_raw(raw_event_id) is None
+
+    assert get_normalized(duplicate_event_id) is None
+
+
+def test_health_check_database_connected():
+    response = client.get("/health")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "ok",
+        "database": "connected",
+    }
+
+def test_health_check_database_connected():
+    response = client.get("/health")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "ok",
+        "service": "logforge-api",
+        "database": "connected",
+    }
+
+
+def test_health_check_database_disconnected():
+
+    with patch.object(
+        main,
+        "db_get_connection",
+        side_effect=Exception("Database unavailable"),
+    ):
+        response = client.get("/health")
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": {
+            "status": "unhealthy",
+            "service": "logforge-api",
+            "database": "disconnected",
+        }
+    }
+
+
+def test_health_check_logs_database_exception(caplog):
+
+    with patch.object(
+        main,
+        "db_get_connection",
+        side_effect=Exception("Database unavailable"),
+    ):
+        with caplog.at_level(logging.ERROR, logger="logforge"):
+            response = client.get("/health")
+
+    assert response.status_code == 503
+    assert (
+        "Health check database connection failed"
+        in caplog.text
+    )
+
+
+def test_request_middleware_logs_method_path_status_and_duration(caplog):
+
+    with caplog.at_level(logging.INFO, logger="logforge"):
+        response = client.get("/health")
+
+    assert response.status_code == 200
+    assert "Request completed" in caplog.text
+    assert "method=GET" in caplog.text
+    assert "path=/health" in caplog.text
+    assert "status_code=200" in caplog.text
+    assert "duration_ms=" in caplog.text
+
+
+def test_metrics_endpoint_returns_expected_fields():
+    response = client.get("/metrics")
+
+    assert response.status_code == 200
+
+    data = response.json()
+    assert "total_requests" in data
+    assert "failed_requests" in data
+    assert "total_ingestion_requests" in data
+    assert "failed_ingestion_requests" in data
+    assert "accepted_events" in data
+    assert "total_request_duration_ms" in data
+
+
+def test_metrics_count_health_request():
+
+    with main.metrics_lock:
+        before = main.ingestion_metrics["total_requests"]
+
+    response = client.get("/health")
+    assert response.status_code == 200
+
+    with main.metrics_lock:
+        after = main.ingestion_metrics["total_requests"]
+
+    assert after == before + 1
+
+
+def test_raw_ingestion_parses_key_value_log():
+    source_name = f"raw-parser-{uuid4()}"
+
+    source_response = client.post(
+        "/sources",
+        json={
+            "name": source_name,
+            "source_type": "server",
+        },
+    )
+    assert source_response.status_code == 201
+
+    response = client.post(
+        "/ingest/raw",
+        json=(
+            f'source={source_name} level=error '
+            'message="Database connection failed"'
+        ),
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["accepted"] is True
+    assert data["event"]["source"] == source_name
+    assert data["event"]["severity"] == "ERROR"
+    assert data["event"]["message"] == "Database connection failed"
+    assert data["raw_event"]["original_record"].startswith(
+        f"source={source_name}"
+    )
+
+
+def test_raw_ingestion_rejects_invalid_log():
+    response = client.post(
+        "/ingest/raw",
+        json="this is not a supported structured log",
+    )
+
+    assert response.status_code == 422
+
+
+def test_raw_ingestion_accepts_access_log():
+    source_name = f"web-{uuid4()}"
+
+    source_response = client.post(
+        "/sources",
+        json={
+            "name": source_name,
+            "source_type": "server",
+        },
+    )
+    assert source_response.status_code == 201
+
+    access_log = (
+        '192.168.1.10 - - [22/Oct/2026:10:20:30 +0000] '
+        '"GET /health HTTP/1.1" 200 123 "-" "Mozilla/5.0"'
+    )
+
+    response = client.post(
+        "/ingest/raw",
+        json=(
+            f'source={source_name} level=INFO '
+            'message="GET /health HTTP/1.1 200"'
+        ),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["accepted"] is True
+
+
+def test_raw_ingestion_accepts_access_log_with_registered_source():
+    source_name = f"nginx-prod-{uuid4()}"
+
+    source_response = client.post(
+        "/sources",
+        json={
+            "name": source_name,
+            "source_type": "server",
+        },
+    )
+    assert source_response.status_code == 201
+
+    access_log = (
+        '192.168.1.10 - - [22/Oct/2026:10:20:30 +0000] '
+        '"GET /health HTTP/1.1" 200 123 "-" "Mozilla/5.0"'
+    )
+
+    response = client.post(
+        f"/ingest/raw?source_name={source_name}",
+        json=access_log,
+    )
+
+    assert response.status_code == 200
+
+    data = response.json()
+    assert data["accepted"] is True
+    assert data["event"]["source"] == source_name
+    assert data["event"]["severity"] == "INFO"
+    assert data["event"]["message"] == "GET /health HTTP/1.1 200"
+    assert data["raw_event"]["access_log_metadata"]["client_ip"] == (
+        "192.168.1.10"
+    )
+
+def test_raw_ingestion_preserves_json_timestamp():
+
+    source_name = f"timestamp-test-{uuid4()}"
+
+    source_response = client.post(
+        "/sources",
+        json={
+            "name": source_name,
+            "source_type": "server",
+        },
+    )
+    assert source_response.status_code == 201
+
+    original_timestamp = "2026-10-22T15:50:30+05:30"
+
+    payload = {
+        "source": source_name,
+        "level": "INFO",
+        "message": "Application started",
+        "timestamp": original_timestamp,
+    }
+
+    response = client.post("/ingest/raw", json=payload)
+
+    assert response.status_code == 200
+
+    data = response.json()
+    assert data["accepted"] is True
+    assert data["event"]["source"] == source_name
+
+    actual_timestamp = datetime.fromisoformat(
+        data["event"]["observed_at"].replace("Z", "+00:00")
+    )
+
+    expected_timestamp = datetime(
+        2026, 10, 22, 10, 20, 30,
+        tzinfo=timezone.utc,
+    )
+    assert actual_timestamp == expected_timestamp
+
+
+def test_raw_ingestion_rejects_invalid_json_timestamp():
+    source_name = f"timestamp-invalid-{uuid4()}"
+
+    source_response = client.post(
+        "/sources",
+        json={
+            "name": source_name,
+            "source_type": "server",
+        },
+    )
+    assert source_response.status_code == 201
+
+    response = client.post(
+        "/ingest/raw",
+        json={
+            "source": source_name,
+            "level": "INFO",
+            "message": "Application started",
+            "timestamp": "not-a-valid-timestamp",
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_raw_ingestion_rejects_timestamp_without_timezone():
+    source_name = f"timestamp-no-tz-{uuid4()}"
+
+    source_response = client.post(
+        "/sources",
+        json={
+            "name": source_name,
+            "source_type": "server",
+        },
+    )
+    assert source_response.status_code == 201
+
+    response = client.post(
+        "/ingest/raw",
+        json={
+            "source": source_name,
+            "level": "INFO",
+            "message": "Application started",
+            "timestamp": "2026-10-22T10:20:30",
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_raw_ingestion_accepts_json_without_timestamp():
+    source_name = f"timestamp-missing-{uuid4()}"
+
+    source_response = client.post(
+        "/sources",
+        json={
+            "name": source_name,
+            "source_type": "server",
+        },
+    )
+    assert source_response.status_code == 201
+
+    response = client.post(
+        "/ingest/raw",
+        json={
+            "source": source_name,
+            "level": "INFO",
+            "message": "Application started",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["event"]["observed_at"]
+
+
+def test_request_size_limit():
+    oversized_payload = b"x" * (1024 * 1024 + 1)
+
+    response = client.post(
+        "/ingest/raw",
+        content=oversized_payload,
+        headers={"Content-Type": "application/octet-stream"},
+    )
+
+    assert response.status_code == 413
