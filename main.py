@@ -774,27 +774,33 @@ def get_source(source_id: str):
         )
     return source
 
+
 @app.get("/events")
 def list_events(
     limit: int = Query(default=10, ge=1, le=100),
-    offset: int = Query(default=0,ge=0),
+    offset: int = Query(default=0, ge=0),
     source: str | None = Query(default=None, min_length=1),
-    severity: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] | None = Query(default=None)
+    severity: Literal[
+        "DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"
+    ] | None = Query(default=None),
+        search: str | None = Query(default=None, min_length=1, max_length=200),
 ):
     paginated_events, total = db_list_normalized_page(
         limit=limit,
         offset=offset,
         source=source,
         severity=severity,
+        search=search,
     )
 
     return {
-        "count": len(paginated_events),
-        "total": total,
-        "limit": limit,
-        "offset": offset,
-        "events": paginated_events,
-    }
+            "count": len(paginated_events),
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "events": paginated_events,
+        }
+
 
 @app.get("/metrics")
 def get_metrics():

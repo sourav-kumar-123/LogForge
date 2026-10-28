@@ -411,11 +411,13 @@ def save_log_batch(events: list[dict]) -> None:
                     ),
                 )
 
+
 def list_normalized_page(
     limit: int,
     offset: int,
     source: str | None = None,
     severity: str | None = None,
+    search: str | None = None,
 ) -> tuple[list[dict], int]:
     conditions = []
     params = []
@@ -427,6 +429,19 @@ def list_normalized_page(
     if severity is not None:
         conditions.append("severity = %s")
         params.append(severity.upper())
+
+    if search is not None and search.strip():
+        conditions.append(
+            """
+            (
+                message ILIKE %s
+                OR source ILIKE %s
+                OR CAST(event_id AS TEXT) ILIKE %s
+            )
+            """
+        )
+        search_term = f"%{search.strip()}%"
+        params.extend([search_term, search_term, search_term])
 
     where_clause = (
         " WHERE " + " AND ".join(conditions)
@@ -469,3 +484,4 @@ def list_normalized_page(
     ]
 
     return events, total
+

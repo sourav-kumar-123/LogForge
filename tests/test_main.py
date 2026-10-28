@@ -1542,3 +1542,107 @@ def test_csv_file_upload_exceeds_request_size_limit():
     )
 
     assert response.status_code == 413
+
+
+def test_list_events_searches_message_case_insensitively():
+    source_name = f"search-message-{uuid4()}"
+    source_response = client.post(
+        "/sources",
+        json={"name": source_name, "source_type": "server"},
+    )
+    assert source_response.status_code == 201
+
+    ingest_response = client.post(
+        "/ingest",
+        json={
+            "source": source_name,
+            "level": "ERROR",
+            "message": "Unique Database Timeout Search Test",
+        },
+    )
+    assert ingest_response.status_code == 200
+
+    response = client.get("/events?search=database%20timeout")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total"] >= 1
+    assert any(
+        event["message"] == "Unique Database Timeout Search Test"
+        for event in data["events"]
+    )
+
+
+def test_list_events_searches_source():
+    source_name = f"unique-source-search-{uuid4()}"
+
+    source_response = client.post(
+        "/sources",
+        json={"name": source_name, "source_type": "server"},
+    )
+    assert source_response.status_code == 201
+
+    ingest_response = client.post(
+        "/ingest",
+        json={
+            "source": source_name,
+            "level": "INFO",
+            "message": "Source search test event",
+        },
+    )
+    assert ingest_response.status_code == 200
+
+    response = client.get("/events?search=unique-source-search")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert any(event["source"] == source_name for event in data["events"])
+
+
+def test_list_events_search_combines_with_severity_and_source():
+    source_name = f"combined-search-{uuid4()}"
+
+    source_response = client.post(
+        "/sources",
+        json={"name": source_name, "source_type": "server"},
+    )
+    assert source_response.status_code == 201
+
+    for level, message in [
+        ("ERROR", "Unique Combined Search Marker"),
+        ("INFO", "Unique Combined Search Marker"),
+        ("ERROR", "A different message"),
+    ]:
+        ingest_response = client.post(
+            "/ingest",
+            json={
+                "source": source_name,
+                "level": level,
+                "message": message,
+            },
+        )
+        assert ingest_response.status_code == 200
+
+    response = client.get(
+        f"/events?search=Combined%20Search%20Marker"
+        f"&source={source_name}&severity=ERROR"
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total"] == 1
+    assert data["count"] == 1
+    assert data["events"][0]["severity"] == "ERROR"
+    assert data["events"][0]["source"] == source_name
+
+
+def test_list_events_search_returns_empty_when_no_match():
+    response = client.get(
+        "/events?search=definitely-no-such-log-marker-12345"
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total"] == 0
+    assert data["count"] == 0
+    assert data["events"] == []
